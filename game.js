@@ -1,0 +1,764 @@
+
+'use strict';
+const { Engine, Bodies, Body, World, Events, Composite } = Matter;
+
+// ─── Canvas & sizing ─────────────────────────────────────────────────────────
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  cv.width = W;
+  cv.height = H;
+  // Regenerate FISH on resize
+  makeFISH();
+  // Rebuild ground if engine exists
+  if (G && G.eng) rebuildGround();
+}
+
+// ─── Layout helpers — always derived from W/H ─────────────────────────────────
+// Portrait: tray on left, platform on right
+// Landscape: same but proportions shift
+function isLandscape() { return W > H; }
+function GY() { return Math.round(H * (isLandscape() ? 0.84 : 0.86)); }
+function TRAY_X() { return Math.round(W * (isLandscape() ? 0.18 : 0.22)); }
+function TRAY_TOP_Y() { return GY() - Math.round(H * (isLandscape() ? 0.18 : 0.14)); }
+function BRIK_REST_Y() { return TRAY_TOP_Y() - BH() / 2; }
+function PLAT_BASE_X() { return Math.round(W * (isLandscape() ? 0.78 : 0.73)); }
+function PLAT_BASE_Y() { return GY() - 20; }
+
+// Brik size — scales with screen
+function BW() { return Math.round(Math.min(W, H) * 0.065); }
+function BH() { return Math.round(Math.min(W, H) * 0.115); }
+
+// ─── FISH ───────────────────────────────────────────────────────────────────
+let FISH = [];
+function makeFISH() {
+  const n = 10;
+  FISH = Array.from({ length: n }, () => ({
+    x: Math.random() * W,
+    y: Math.random() * GY() * 0.8,
+    r: 15,
+    ph: Math.random() * 6.28,
+    speed: Math.random() * 0.25 + 0.05,
+  }));
+}
+
+// ─── Skins (one per tetra-brik flavour) ──────────────────────────────────────
+// Each entry needs: { src, ratio }
+// ratio = natural image width / height  (so the brik is never stretched)
+// Add or swap URLs here — the game will pick one randomly each round.
+const SKINS = [
+  { src: 'imgs/tinto.png', ratio: 100 / 190 },
+  { src: 'imgs/blanco.png', ratio: 100 / 190 },
+  { src: 'imgs/rosado.png', ratio: 100 / 190 },
+  { src: 'imgs/tintodulce.png', ratio: 100 / 190 },
+  { src: 'imgs/blancodulce.png', ratio: 100 / 190 },
+];
+
+// ─── Asset loader ────────────────────────────────────────────────────────────
+// Add all images (and later Audio objects) to ASSETS before boot.
+// Each entry: { type:'image'|'audio', obj: Image|Audio, src: string }
+// The loader waits for everything to resolve then fades out.
+const ASSETS = [];
+
+function addImage(src, crossOrigin = true) {
+  const img = new Image();
+  if (crossOrigin) img.crossOrigin = 'anonymous';
+  img.src = src;
+  ASSETS.push({ type: 'image', obj: img, src });
+  return img;
+}
+
+function addAudio(src) {
+  const audio = new Audio();
+  audio.preload = 'auto';
+  audio.src = src;
+  ASSETS.push({ type: 'audio', obj: audio, src });
+  return audio;
+}
+
+// ── Register skin images ──────────────────────────────────────────────────────
+SKINS.forEach(s => { s.img = addImage(s.src); });
+
+// ── Register sound effects ────────────────────────────────────────────────────
+const SFX_LAUNCH = [addAudio('sounds/ahiva.mp3'), addAudio('sounds/ahivapapa.mp3')];
+const SFX_PERFECT = [
+  addAudio('sounds/yesss.mp3'),
+  addAudio('sounds/yes.mp3'),
+  addAudio('sounds/vamosquesepuede.mp3'),
+  addAudio('sounds/paravosyuta.mp3'),
+  addAudio('sounds/opaaaa.mp3'),
+  addAudio('sounds/opa.mp3'),
+];
+const SFX_FAIL = [addAudio('sounds/oleee.mp3'), addAudio('sounds/vamosquesepuede.mp3')];
+const SFX_LAND = [addAudio('sounds/ahorasi.mp3'), addAudio('sounds/paravos.mp3')];
+
+// ── Background image (optional) ───────────────────────────────────────────────
+// const BG_IMG = addImage('/background.jpg');
+const FISH_IMG = addImage('imgs/fish.png');
+
+// ─── DOM ─────────────────────────────────────────────────────────────────────
+const msgEl = document.getElementById('msg');
+const popEl = document.getElementById('pop');
+let popTimer = null;
+
+function showMsg(h, sub = '', pts = '', showBtn = false) {
+  msgEl.innerHTML =
+    `<h1>${h}</h1>` +
+    (sub ? `<div class="sub">${sub}</div>` : '') +
+    (pts ? `<div class="pts">${pts}</div>` : '') +
+    (showBtn ? `<button class="restart-btn" onclick="init()">PLAY AGAIN</button>` : '');
+  msgEl.classList.remove('off');
+}
+function hideMsg() { msgEl.classList.add('off'); }
+function pop(txt) {
+  popEl.textContent = txt;
+  popEl.classList.add('on');
+  clearTimeout(popTimer);
+  popTimer = setTimeout(() => popEl.classList.remove('on'), 1400);
+}
+
+// ─── Game state ───────────────────────────────────────────────────────────────
+let G;
+
+function newG() {
+  return {
+    eng: null, wld: null,
+    platBody: null, brikBody: null,
+    skin: SKINS[0],
+    particles: [], trail: [],
+    // Touch / mouse drag
+    touching: false,
+    touchStart: { x: 0, y: 0 },   // where finger first landed
+    touchCur: { x: 0, y: 0 },   // current finger position
+    phase: 'idle',               // 'idle' | 'flying' | 'dead'
+    shake: 0,
+    score: 0, best: 0, streak: 0, level: 1,
+    sid: 0,
+    platW: 0,
+    landedBriks: [],   // briks that have successfully landed and stay in world
+  };
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+function init() {
+  if (G && G.eng) {
+    // Landed briks are physics bodies — World.clear handles them,
+    // but reset the array reference too
+    G.landedBriks = [];
+    Events.off(G.eng);
+    World.clear(G.eng.world, false);
+    Engine.clear(G.eng);
+  }
+  const prevBest = G ? G.best : 0;
+  G = newG();
+  G.best = prevBest;
+  G.sid = Math.random();
+  G.touchStart = { x: TRAY_X(), y: BRIK_REST_Y() };
+  G.touchCur = { x: TRAY_X(), y: BRIK_REST_Y() };
+
+  G.eng = Engine.create({ gravity: { x: 0, y: 2.5 } });
+  G.wld = G.eng.world;
+
+  rebuildGround();
+  Events.on(G.eng, 'collisionStart', onHit);
+
+  G.skin = SKINS[Math.floor(Math.random() * SKINS.length)];
+  makePlatform();
+  updateUI();
+  showMsg('VINO TORO FLIP',
+    'DRAG LEFT → POWER &nbsp;·&nbsp; DRAG UP/DOWN → ANGLE<br>RELEASE TO FLIP · LAND UPRIGHT');
+  setTimeout(hideMsg, 4000);
+}
+
+function rebuildGround() {
+  Composite.allBodies(G.wld)
+    .filter(b => b.label === 'ground')
+    .forEach(b => { try { World.remove(G.wld, b); } catch (_) { } });
+  World.add(G.wld, Bodies.rectangle(W / 2, GY() + 15, W + 300, 30,
+    { isStatic: true, label: 'ground', friction: .8, restitution: .05 }));
+}
+
+// ─── Platform ─────────────────────────────────────────────────────────────────
+function makePlatform() {
+  if (G.platBody) { try { World.remove(G.wld, G.platBody); } catch (_) { } }
+  const pw = Math.max(BW() * 1.6, Math.min(W * 0.22, W * 0.22 - G.level * 4));
+  const maxRise = GY() * 0.55;
+  const py = Math.max(GY() - maxRise, PLAT_BASE_Y() - G.level * Math.round(H * 0.03));
+  const jitter = W * 0.08;
+  const px = PLAT_BASE_X() + (Math.random() - .5) * jitter;
+  G.platW = pw;
+  G.platBody = Bodies.rectangle(px, py, pw, 12,
+    { isStatic: true, label: 'platform', friction: .9, restitution: .02 });
+  G.platBody._pw = pw;
+  World.add(G.wld, G.platBody);
+}
+
+// ─── Arc calculation ──────────────────────────────────────────────────────────
+// Player touches near brik and drags LEFT (and optionally up/down).
+// The drag vector is used: rightward release = forward throw (mirrored).
+function arcFromDrag() {
+  const ox = TRAY_X(), oy = BRIK_REST_Y();
+  const sx = G.touchStart.x, sy = G.touchStart.y;
+  const cx = G.touchCur.x, cy = G.touchCur.y;
+
+  // Drag delta from start to current
+  const ddx = cx - sx;   // negative = dragged left = pulling back
+  const ddy = cy - sy;
+
+  // Horizontal pull: only counts when dragged LEFT
+  const pullX = Math.max(0, -ddx);
+  const maxPull = W * 0.38;                         // up to 38% of screen width
+  const clampedX = Math.min(pullX, maxPull);
+  const power = clampedX / maxPull;              // 0..1
+
+  // Vertical component shifts launch angle
+  const baseAngle = 52 * Math.PI / 180;
+  const angleRange = 35 * Math.PI / 180;
+  const dyNorm = -ddy / (H * 0.2);                 // up = negative = steeper
+  const angle = Math.max(8 * Math.PI / 180, Math.min(82 * Math.PI / 180,
+    baseAngle + dyNorm * angleRange));
+
+  const speed = 10 + power * 20;                   // 10..30
+  const vx = Math.cos(angle) * speed;
+  const vy = -Math.sin(angle) * speed;           // negative = up
+  const spin = -(power * 0.24 + 0.05);            // CCW
+
+  return { vx, vy, spin, power, angle, pullX: clampedX };
+}
+
+// ─── Launch ───────────────────────────────────────────────────────────────────
+function launch() {
+  if (G.brikBody) { try { World.remove(G.wld, G.brikBody); } catch (_) { } G.brikBody = null; }
+
+  const { vx, vy, spin, power } = arcFromDrag();
+  if (power < 0.04) return;   // tap without drag = ignore
+
+  const brik = Bodies.rectangle(TRAY_X(), BRIK_REST_Y(), BW(), BH(), {
+    label: 'brik', restitution: .15, friction: .6, frictionAir: .007, density: .005,
+  });
+  brik._hit = false;
+  brik._done = false;
+  brik._skin = G.skin;   // remember skin so it draws correctly after archiving
+  World.add(G.wld, brik);
+  G.brikBody = brik;
+
+  Body.setVelocity(brik, { x: vx, y: vy });
+  Body.setAngularVelocity(brik, spin);
+  // select random SFX_LAUNCH to play on launch
+  const sfx = SFX_LAUNCH[Math.floor(Math.random() * SFX_LAUNCH.length)];
+  sfx.currentTime = 0;
+  sfx.play().catch(() => { });;
+  G.phase = 'flying';
+  G.trail = [];
+  hideMsg();
+}
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+// Works for both touch and mouse.
+// Drag can start ANYWHERE — no need to hit the brik exactly.
+function evXY(e) {
+  const src = e.changedTouches ? e.changedTouches[0] : e;
+  return { x: src.clientX, y: src.clientY };
+}
+
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (G.phase !== 'idle') return;
+  const p = evXY(e);
+  G.touching = true;
+  G.touchStart = { ...p };
+  G.touchCur = { ...p };
+}, { passive: false });
+
+cv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!G.touching) return;
+  G.touchCur = evXY(e);
+}, { passive: false });
+
+cv.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (!G.touching || G.phase !== 'idle') return;
+  G.touching = false;
+  launch();
+  // Reset drag visual
+  G.touchStart = { x: TRAY_X(), y: BRIK_REST_Y() };
+  G.touchCur = { x: TRAY_X(), y: BRIK_REST_Y() };
+}, { passive: false });
+
+cv.addEventListener('touchcancel', e => {
+  e.preventDefault();
+  G.touching = false;
+}, { passive: false });
+
+// Mouse fallback (desktop)
+cv.addEventListener('mousedown', e => {
+  if (G.phase !== 'idle') return;
+  const p = evXY(e);
+  G.touching = true;
+  G.touchStart = { ...p };
+  G.touchCur = { ...p };
+});
+cv.addEventListener('mousemove', e => {
+  if (!G.touching) return;
+  G.touchCur = evXY(e);
+});
+cv.addEventListener('mouseup', e => {
+  if (!G.touching || G.phase !== 'idle') return;
+  G.touching = false;
+  launch();
+  G.touchStart = { x: TRAY_X(), y: BRIK_REST_Y() };
+  G.touchCur = { x: TRAY_X(), y: BRIK_REST_Y() };
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') init();
+});
+
+// ─── Collision ────────────────────────────────────────────────────────────────
+function onHit({ pairs }) {
+  const sid = G.sid;
+  pairs.forEach(({ bodyA, bodyB }) => {
+    const brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
+    const other = brik === bodyA ? bodyB : bodyA;
+    if (!brik || brik !== G.brikBody || brik._hit) return;
+    brik._hit = true;
+
+    burst(brik.position.x, brik.position.y,
+      other.label === 'platform' ? 18 : 8,
+      other.label === 'platform');
+    G.shake = other.label === 'platform' ? 8 : 3;
+
+    if (other.label === 'platform') {
+      setTimeout(() => { if (G.sid === sid) settle(brik, other); }, 1200);
+    } else {
+      setTimeout(() => { if (G.sid === sid) fail(); }, 700);
+    }
+  });
+}
+
+// ─── Settle ───────────────────────────────────────────────────────────────────
+function settle(brik, plat) {
+  if (brik._done || G.phase === 'dead') return;
+  const spd = Math.hypot(brik.velocity.x, brik.velocity.y);
+  const av = Math.abs(brik.angularVelocity);
+  let a = brik.angle % (Math.PI * 2); if (a < 0) a += Math.PI * 2;
+  const fromUpright = Math.min(a, Math.PI * 2 - a);
+  const fromFlipped = Math.abs(a - Math.PI);
+  const { x: bx, y: by } = brik.position;
+  const { x: px, y: py } = plat.position;
+  const over = Math.abs(bx - px) < plat._pw / 2 + BW() / 2 - 3
+    && by < py + 8 && by > py - BH() * 3;
+
+  if (over && spd < 2.8 && av < 0.10) {
+    let mult = 1, label = 'LANDED!';
+
+    if (fromUpright < 0.38) {
+      mult = 3; label = 'PERFECT!';
+      // Play perfect SFX on perfect landing
+      const sfx = SFX_PERFECT[Math.floor(Math.random() * SFX_PERFECT.length)];
+      sfx.currentTime = 0;
+      sfx.play().catch(() => { });
+
+    }
+    else if (fromFlipped < 0.38) {
+      mult = 2; label = 'UPSIDE DOWN!';
+      // Play perfect SFX on perfect landing
+      const sfx = SFX_LAND[Math.floor(Math.random() * SFX_LAND.length)];
+      sfx.currentTime = 0;
+      sfx.play().catch(() => { });
+    }
+    doSuccess(brik, label, mult);
+  } else if (spd > 0.5 || av > 0.06) {
+    const sid = G.sid;
+    setTimeout(() => { if (G.sid === sid) settle(brik, plat); }, 750);
+  } else {
+    fail();
+    // play random SFX_FAIL on fail
+    const sfx = SFX_FAIL[Math.floor(Math.random() * SFX_FAIL.length)];
+    sfx.currentTime = 0;
+    sfx.play().catch(() => { });
+  }
+}
+
+// ─── Success / Fail ───────────────────────────────────────────────────────────
+function doSuccess(brik, label, mult) {
+  if (brik._done || G.phase === 'dead') return;
+  brik._done = true;
+  G.phase = 'idle';
+  G.streak++;
+  const pts = Math.floor((10 + G.level * 5) * mult * (G.streak > 2 ? G.streak - 1 : 1));
+  G.score += pts;
+  if (G.score > G.best) G.best = G.score;
+  G.level++;
+  updateUI();
+  burst(brik.position.x, brik.position.y - 20, 30, true);
+  G.shake = 6;
+  const streakTxt = G.streak >= 3 ? ` · ${G.streak}× STREAK` : '';
+  pop(`${label}${streakTxt}  +${pts}`);
+  // Archive the landed brik — keep it in the physics world so it stays visible
+  G.landedBriks.push(brik);
+  G.brikBody = null;
+
+  const sid = G.sid;
+  // select random SFX_PERFECT to play on launch
+  const sfx = SFX_PERFECT[Math.floor(Math.random() * SFX_PERFECT.length)];
+  sfx.currentTime = 0;
+  sfx.play();
+  // No makePlatform() — same platform, pile keeps growing
+  setTimeout(() => { if (G.sid !== sid) return; spawnIdle(); }, 950);
+}
+
+function fail() {
+  if (G.phase === 'dead') return;
+  G.phase = 'dead'; G.streak = 0;
+  if (G.score > G.best) G.best = G.score;
+  updateUI();
+  showMsg('OOPS!', '', `SCORE ${G.score}`, true);
+}
+
+function spawnIdle() {
+  // Don't remove brikBody here — landed briks are now owned by G.landedBriks
+  // Only remove if it's an un-launched idle placeholder (isStatic)
+  if (G.brikBody && G.brikBody.isStatic) {
+    try { World.remove(G.wld, G.brikBody); } catch (_) { }
+  }
+  G.brikBody = null;
+  G.skin = SKINS[Math.floor(Math.random() * SKINS.length)];
+  G.phase = 'idle';
+  G.trail = [];
+  G.touchStart = { x: TRAY_X(), y: BRIK_REST_Y() };
+  G.touchCur = { x: TRAY_X(), y: BRIK_REST_Y() };
+}
+
+// ─── Particles ────────────────────────────────────────────────────────────────
+function burst(x, y, n, big = false) {
+  const cols = ['#60e8a0', '#e0e060', '#ff6868', '#60b8ff', '#ffffff', '#ff98c8'];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = Math.random() * (big ? 7 : 3.5) + 1;
+    G.particles.push({
+      x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (big ? 3 : 1),
+      life: 1, decay: Math.random() * .02 + .013,
+      r: Math.random() * (big ? 5.5 : 3) + 1.5,
+      col: cols[Math.floor(Math.random() * cols.length)],
+    });
+  }
+}
+
+// ─── UI ───────────────────────────────────────────────────────────────────────
+function updateUI() {
+  document.getElementById('s-score').textContent = G.score;
+  document.getElementById('s-best').textContent = G.best;
+  document.getElementById('s-streak').textContent = G.streak;
+}
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+
+function drawBg() {
+  const gy = GY();
+  const gr = ctx.createLinearGradient(0, 0, 0, gy);
+  gr.addColorStop(0, '#07101a'); gr.addColorStop(1, '#0f1e2c');
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, gy);
+
+  const t = Date.now() * .001;
+  FISH.forEach(s => {
+    s.x += s.speed;
+    if (s.x > W + s.r) s.x = -s.r;
+    ctx.globalAlpha = .25 + Math.sin(t + s.ph) * .2;
+    if (FISH_IMG.complete && FISH_IMG.naturalWidth > 0) {
+      const ratio = FISH_IMG.naturalWidth / FISH_IMG.naturalHeight;
+      const drawH = s.r * 2;
+      const drawW = drawH * ratio;
+      ctx.drawImage(FISH_IMG, s.x - drawW / 2, s.y - drawH / 2, drawW, drawH);
+    } else {
+      // fallback circle while image loads
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+  ctx.globalAlpha = 1;
+
+  // Ground
+  ctx.fillStyle = '#0c1420'; ctx.fillRect(0, gy, W, H - gy);
+  // Grass strip
+  ctx.fillStyle = '#14261a'; ctx.fillRect(0, gy, W, 5);
+}
+
+function drawTray() {
+  const tx = TRAY_X(), ty = TRAY_TOP_Y(), gy = GY();
+  const bw = BW(), legW = Math.max(6, bw * 0.22);
+  const tableW = bw * 3.2;
+
+  // Legs
+  ctx.fillStyle = '#182430';
+  ctx.fillRect(tx - tableW / 2 + 4, ty + 2, legW, gy - ty - 2);
+  ctx.fillRect(tx + tableW / 2 - 4 - legW, ty + 2, legW, gy - ty - 2);
+  // Table top
+  ctx.fillStyle = '#1e3040';
+  ctx.fillRect(tx - tableW / 2, ty - 10, tableW, 12);
+  // Top shine
+  ctx.fillStyle = '#263a50';
+  ctx.fillRect(tx - tableW / 2, ty - 10, tableW, 3);
+}
+
+function drawBrik(x, y, angle, skin) {
+  skin = skin || G.skin || SKINS[0];
+  const bh = BH();
+  // Preserve each image's own aspect ratio so nothing looks stretched
+  const bw = Math.round(bh * (skin.ratio || 195 / 300));
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+
+  ctx.shadowColor = 'rgba(0,0,0,0.65)';
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetY = 6;
+
+  if (skin.img && skin.img.complete && skin.img.naturalWidth > 0) {
+    ctx.drawImage(skin.img, -bw / 2, -bh / 2, bw, bh);
+  } else {
+    // Fallback while image loads — plain tinted rectangle
+    ctx.fillStyle = '#c82020';
+    ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(-bw / 2, -bh / 2, bw, bh * 0.18);
+  }
+
+  ctx.restore();
+}
+
+function drawPlatform() {
+  if (!G.platBody) return;
+  const { x, y } = G.platBody.position, w = G.platBody._pw || G.platW, h = 12;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6;
+  ctx.fillStyle = '#162218'; ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.fillStyle = '#244830'; ctx.fillRect(x - w / 2, y - h / 2, w, 4);
+  ctx.fillStyle = '#38785a'; ctx.fillRect(x - w / 2, y - h / 2, w, 1.5);
+  // Drop guide
+  ctx.strokeStyle = 'rgba(96,232,160,.3)'; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+  ctx.beginPath(); ctx.moveTo(x, y - h / 2 - 5); ctx.lineTo(x, y - h / 2 - 16); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ─── Aimer: drag indicator + trajectory dots + power bar ─────────────────────
+function drawAimer() {
+  if (G.phase !== 'idle' || !G.touching) return;
+
+  const { vx, vy, power, angle, pullX } = arcFromDrag();
+  const ox = TRAY_X(), oy = BRIK_REST_Y();
+  const cx = G.touchCur.x, cy = G.touchCur.y;
+
+  if (power < 0.02) return;
+
+
+  // ── Trajectory preview ─────────────────────────────────────────────────────
+  if (power > 0.06) {
+    const grav = 2.5 * 0.003;
+    ctx.save();
+    for (let t = 0.08; t < 3.2; t += 0.1) {
+      const ex = ox + vx * t * 16;
+      const ey = oy + vy * t * 16 + 0.5 * grav * (t * 16) * (t * 16);
+      if (ex > W + 20 || ey > GY() + 10 || ex < 0) break;
+      const frac = t / 3.2;
+      const r2 = Math.floor(frac * 200 + 55), g2 = Math.floor((1 - frac) * 200 + 55);
+      ctx.fillStyle = `rgba(${r2},${g2},80,${(1 - frac) * 0.8 * power})`;
+      ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, 4 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ── Power bar — below the tray, wide and thumb-friendly ─────────────────
+  const barW = Math.min(W * 0.45, 220);
+  const bx = ox - barW / 2;
+  const by = TRAY_TOP_Y() + 18;
+  const barH = Math.max(12, H * 0.022);
+  const rc = Math.floor(power * 220), gc = Math.floor((1 - power) * 180 + 60);
+  ctx.save();
+  // bg track
+  ctx.fillStyle = 'rgba(0,0,0,.55)';
+  ctx.beginPath(); ctx.roundRect(bx - 2, by - 2, barW + 4, barH + 4, 4); ctx.fill();
+  // sweet-spot highlight
+  ctx.fillStyle = 'rgba(255,255,255,.07)';
+  ctx.beginPath(); ctx.roundRect(bx + barW * 0.3, by, barW * 0.3, barH, 2); ctx.fill();
+  // fill
+  ctx.fillStyle = `rgb(${rc},${gc},50)`;
+  ctx.beginPath(); ctx.roundRect(bx, by, barW * power, barH, 2); ctx.fill();
+  // label
+  ctx.fillStyle = 'rgba(140,160,170,.6)';
+  ctx.font = `${Math.round(Math.max(9, barH * 0.7))}px Courier New`;
+  ctx.textAlign = 'center';
+  ctx.fillText('POWER', bx + barW / 2, by + barH + Math.round(barH * 1.1));
+  ctx.restore();
+
+
+}
+
+function drawTrail() {
+  const tr = G.trail; if (tr.length < 2) return;
+  ctx.save();
+  for (let i = 1; i < tr.length; i++) {
+    ctx.strokeStyle = `rgba(96,232,160,${(i / tr.length) * .32})`;
+    ctx.lineWidth = Math.max(1, 2.5 * (i / tr.length)); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(tr[i - 1].x, tr[i - 1].y); ctx.lineTo(tr[i].x, tr[i].y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Green ring flashes when brik is near upright
+function drawUprightHint() {
+  if (G.phase !== 'flying' || !G.brikBody) return;
+  let a = G.brikBody.angle % (Math.PI * 2); if (a < 0) a += Math.PI * 2;
+  const d = Math.min(a, Math.PI * 2 - a);
+  if (d > .45) return;
+  const { x, y } = G.brikBody.position;
+  ctx.save();
+  ctx.globalAlpha = .42 * (1 - d / .45);
+  ctx.strokeStyle = '#60e8a0'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(x, y, BH() * .7, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+// Idle "drag hint" arrow — shows new players where to drag
+function drawDragHint() {
+  if (G.phase !== 'idle' || G.touching) return;
+  const ox = TRAY_X(), oy = BRIK_REST_Y();
+  const t = Date.now() * .002;
+  const wave = Math.sin(t) * 12;
+  const hintX = ox - 60 + wave;
+
+  ctx.save();
+  ctx.globalAlpha = 0.35 + Math.sin(t) * 0.15;
+  ctx.strokeStyle = '#4a8aaa'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.setLineDash([5, 5]);
+  // Arrow shaft
+  ctx.beginPath(); ctx.moveTo(ox - BW() / 2 - 8, oy); ctx.lineTo(hintX, oy); ctx.stroke();
+  ctx.setLineDash([]);
+  // Arrowhead pointing left
+  ctx.fillStyle = '#4a8aaa';
+  ctx.beginPath();
+  ctx.moveTo(hintX, oy);
+  ctx.lineTo(hintX + 10, oy - 6);
+  ctx.lineTo(hintX + 10, oy + 6);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+let lastT = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastT) / 1000, .05); lastT = ts;
+  Engine.update(G.eng, dt * 1000);
+
+  if (G.phase === 'flying' && G.brikBody) {
+    G.trail.push({ x: G.brikBody.position.x, y: G.brikBody.position.y });
+    if (G.trail.length > 30) G.trail.shift();
+    const { x, y } = G.brikBody.position;
+    if (x > W + 150 || x < -150 || y > H + 150) fail();
+  }
+
+  // Check if any landed brik has fallen off the platform to the ground
+  if (G.phase !== 'dead' && G.landedBriks.length > 0) {
+    const toppled = G.landedBriks.some(b => b.position.y > GY() - 4);
+    if (toppled) fail();
+  }
+
+  G.particles = G.particles.filter(p => p.life > 0);
+  G.particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += .13; p.vx *= .97; p.life -= p.decay; });
+  if (G.shake > 0) G.shake -= .5;
+
+  const sx = G.shake > 0 ? (Math.random() - .5) * G.shake : 0;
+  const sy = G.shake > 0 ? (Math.random() - .5) * G.shake : 0;
+  ctx.save(); ctx.translate(sx, sy);
+
+  drawBg();
+  drawTray();
+  drawTrail();
+  drawPlatform();
+  drawUprightHint();
+  drawDragHint();
+
+  // Draw all landed (stacked) briks first, then active brik on top
+  G.landedBriks.forEach(b => {
+    drawBrik(b.position.x, b.position.y, b.angle, b._skin || SKINS[0]);
+  });
+
+  // Active brik
+  if (G.phase === 'idle' || !G.brikBody) {
+    drawBrik(TRAY_X(), BRIK_REST_Y(), 0, G.skin);
+  } else {
+    drawBrik(G.brikBody.position.x, G.brikBody.position.y, G.brikBody.angle, G.skin);
+  }
+
+  // Particles
+  G.particles.forEach(p => {
+    ctx.save(); ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+
+  drawAimer();
+  ctx.restore();
+  requestAnimationFrame(loop);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => { resize(); if (G && G.eng) rebuildGround(); });
+resize();
+
+// Wait for all assets, show progress, then start
+(function waitForAssets() {
+  const loaderEl = document.getElementById('loader');
+  const fillEl = document.getElementById('loader-fill');
+  const labelEl = document.getElementById('loader-label');
+
+  function checkAsset(asset) {
+    if (asset.type === 'image') {
+      return asset.obj.complete && asset.obj.naturalWidth > 0;
+    }
+    if (asset.type === 'audio') {
+      // readyState 4 = HAVE_ENOUGH_DATA, 3 = HAVE_FUTURE_DATA — either is fine
+      return asset.obj.readyState >= 3;
+    }
+    return true;
+  }
+
+  function tick() {
+    if (ASSETS.length === 0) {
+      launch();
+      return;
+    }
+    const done = ASSETS.filter(checkAsset).length;
+    const total = ASSETS.length;
+    const pct = Math.round((done / total) * 100);
+
+    fillEl.style.width = pct + '%';
+    labelEl.textContent = done < total
+      ? 'LOADING  ' + pct + '%'
+      : 'READY';
+
+    if (done >= total) {
+      // Small pause so "READY" is visible for a beat
+      setTimeout(launch, 300);
+    } else {
+      setTimeout(tick, 80);
+    }
+  }
+
+  function launch() {
+    loaderEl.classList.add('fade');
+    loaderEl.addEventListener('transitionend', () => loaderEl.remove(), { once: true });
+    init();
+    requestAnimationFrame(loop);
+  }
+
+  tick();
+})();

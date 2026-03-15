@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>VINO TORO FLIP</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.20.0/matter.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div id="loader">
+    <h2>VINO TORO FLIP</h2>
+    <div id="loader-track">
+      <div id="loader-fill"></div>
+    </div>
+    <div id="loader-label">LOADING...</div>
+  </div>
+
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    <div class="stat">
+      <div class="stat-label">SCORE</div>
+      <div class="stat-val" id="s-score">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">BEST</div>
+      <div class="stat-val" id="s-best">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">STREAK</div>
+      <div class="stat-val" id="s-streak">0</div>
+    </div>
+  </div>
+
+  <div id="msg">
+    <h1>VINO TORO FLIP</h1>
+    <div class="sub">TOUCH &amp; DRAG LEFT<br>TO AIM · RELEASE TO FLIP</div>
+    <div class="sub" style="color:#243040;margin-top:6px">LAND UPRIGHT ON THE PLATFORM</div>
+  </div>
+
+  <div id="pop"></div>
+  <div id="hint">R — RESTART</div>
+
+  <script src="game.js" defer></script>
+</body>
+
+</html>
