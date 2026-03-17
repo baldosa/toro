@@ -236,7 +236,7 @@ function arcFromDrag() {
   const angle = Math.max(0, Math.min(90 * Math.PI / 180,
     baseAngle + dyNorm * angleRange));
 
-  const speed = 30 + power * 40;                   // base x3: 30..50
+  const speed = 30 + power * 30;                   // base x3: 30..50
   const vx = Math.cos(angle) * speed;
   const vy = -Math.sin(angle) * speed;           // negative = up
   const spin = -(power * 0.24 + 0.05);            // CCW
