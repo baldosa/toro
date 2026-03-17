@@ -47,15 +47,19 @@ function makeFISH() {
 }
 
 // ─── Skins (one per tetra-brik flavour) ──────────────────────────────────────
-// Each entry needs: { src, ratio }
+// Each entry needs: { src, ratio, wineParticles }
 // ratio = natural image width / height  (so the brik is never stretched)
-// Add or swap URLs here — the game will pick one randomly each round.
+// wineParticles = color palette for melt effect when brik hits the floor.
+const TINTO_PALETTE = ['#4a1a6a', '#6b2d8a', '#8b4aaa', '#a86bc4', '#c090e0', '#e0b8ff'];
+const BLANCO_PALETTE = ['#7cb87c', '#9ed49e', '#b8e0b8', '#c8e8c8', '#d4f0d4', '#e0f8e0'];
+const ROSADO_PALETTE = ['#c87090', '#d890a8', '#e8b0c0', '#f0c8d4', '#f8dce4', '#ffe0ea'];
+
 const SKINS = [
-  { src: 'imgs/tinto.png', ratio: 100 / 190 },
-  { src: 'imgs/blanco.png', ratio: 100 / 190 },
-  { src: 'imgs/rosado.png', ratio: 100 / 190 },
-  { src: 'imgs/tintodulce.png', ratio: 100 / 190 },
-  { src: 'imgs/blancodulce.png', ratio: 100 / 190 },
+  { src: 'imgs/tinto.png', ratio: 100 / 190, wineParticles: TINTO_PALETTE },
+  { src: 'imgs/blanco.png', ratio: 100 / 190, wineParticles: BLANCO_PALETTE },
+  { src: 'imgs/rosado.png', ratio: 100 / 190, wineParticles: ROSADO_PALETTE },
+  { src: 'imgs/tintodulce.png', ratio: 100 / 190, wineParticles: TINTO_PALETTE },
+  { src: 'imgs/blancodulce.png', ratio: 100 / 190, wineParticles: BLANCO_PALETTE },
 ];
 
 // ─── Asset loader ────────────────────────────────────────────────────────────
@@ -331,14 +335,19 @@ function onHit({ pairs }) {
     if (!brik || brik !== G.brikBody || brik._hit) return;
     brik._hit = true;
 
-    burst(brik.position.x, brik.position.y,
-      other.label === 'platform' ? 18 : 8,
-      other.label === 'platform');
-    G.shake = other.label === 'platform' ? 8 : 3;
-
     if (other.label === 'platform') {
+      burst(brik.position.x, brik.position.y, 18, true);
+      G.shake = 8;
       setTimeout(() => { if (G.sid === sid) settle(brik, other); }, 1200);
     } else {
+      if (other.label === 'ground') {
+        meltBrik(brik.position.x, brik.position.y, brik._skin);
+        try { World.remove(G.wld, brik); } catch (_) { }
+        G.brikBody = null;
+      } else {
+        burst(brik.position.x, brik.position.y, 8, false);
+      }
+      G.shake = 3;
       setTimeout(() => { if (G.sid === sid) fail(); }, 700);
     }
   });
@@ -448,6 +457,28 @@ function burst(x, y, n, big = false) {
       life: 1, decay: Math.random() * .02 + .013,
       r: Math.random() * (big ? 5.5 : 3) + 1.5,
       col: cols[Math.floor(Math.random() * cols.length)],
+    });
+  }
+}
+
+// Wine melt particles when brik hits the floor (color from skin.wineParticles)
+function meltBrik(x, y, skin) {
+  const palette = (skin && skin.wineParticles);
+  const n = 140;
+  const spread = 8;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = Math.random() * 3 + 1.5;
+    const vy = Math.random() * 2.5 + 1.5;
+    G.particles.push({
+      x: x + (Math.random() - 0.5) * spread,
+      y: y,
+      vx: Math.cos(a) * s,
+      vy: vy,
+      life: 1,
+      decay: Math.random() * 0.012 + 0.008,
+      r: Math.random() * 2.5 + 1.8,
+      col: palette[Math.floor(Math.random() * palette.length)],
     });
   }
 }
