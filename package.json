@@ -1,0 +1,11 @@
+{
+  "name": "vino-toro-flip",
+  "private": true,
+  "scripts": {
+    "dev": "live-server --port=3000 --open=/",
+    "start": "live-server --port=3000 --open=/"
+  },
+  "devDependencies": {
+    "live-server": "^1.2.2"
+  }
+}

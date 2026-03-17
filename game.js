@@ -213,13 +213,16 @@ function arcFromDrag() {
   const pullX = Math.max(0, -ddx);
   const maxPull = W * 0.38;                         // up to 38% of screen width
   const clampedX = Math.min(pullX, maxPull);
-  const power = clampedX / maxPull;              // 0..1
+  const power = Math.min(1, 2 * clampedX / maxPull);  // 0..1, 2x sensitivity
 
-  // Vertical component shifts launch angle
-  const baseAngle = 52 * Math.PI / 180;
-  const angleRange = 35 * Math.PI / 180;
-  const dyNorm = -ddy / (H * 0.2);                 // up = negative = steeper
-  const angle = Math.max(8 * Math.PI / 180, Math.min(82 * Math.PI / 180,
+  // Initial angle from click Y: brik rest Y = 0°, top of viewport = 90°
+  const spaceToTop = oy;  // brik rest y to top (top is 0)
+  const clickY = Math.max(0, Math.min(sy, spaceToTop));
+  const baseAngleDeg = spaceToTop <= 0 ? 45 : 90 * (spaceToTop - clickY) / spaceToTop;
+  const baseAngle = baseAngleDeg * Math.PI / 180;
+  const angleRange = 70 * Math.PI / 180;  // 2x sensitivity for drag
+  const dyNorm = -ddy / (H * 0.2);        // up = steeper
+  const angle = Math.max(0, Math.min(90 * Math.PI / 180,
     baseAngle + dyNorm * angleRange));
 
   const speed = 10 + power * 20;                   // 10..30
