@@ -327,23 +327,33 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Collision ────────────────────────────────────────────────────────────────
-// Ground always means dead (melt + fail), even if brik touched platform first in same throw.
+// Any brik (flying or previously landed) that touches the ground is melted.
 function onHit({ pairs }) {
   const sid = G.sid;
   pairs.forEach(({ bodyA, bodyB }) => {
     const brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
     const other = brik === bodyA ? bodyB : bodyA;
-    if (!brik || brik !== G.brikBody) return;
+    if (!brik) return;
 
     if (other.label === 'ground') {
-      brik._hit = true;
       meltBrik(brik.position.x, brik.position.y, brik._skin);
       try { World.remove(G.wld, brik); } catch (_) { }
-      G.brikBody = null;
-      G.shake = 3;
-      setTimeout(function () { if (G.sid === sid) fail(); }, 700);
+      if (brik === G.brikBody) {
+        brik._hit = true;
+        G.brikBody = null;
+        G.shake = 3;
+        setTimeout(function () { if (G.sid === sid) fail(); }, 700);
+      } else {
+        var idx = G.landedBriks.indexOf(brik);
+        if (idx >= 0) G.landedBriks.splice(idx, 1);
+        if (G.phase !== 'dead') {
+          G.shake = 3;
+          setTimeout(function () { if (G.sid === sid) fail(); }, 700);
+        }
+      }
       return;
     }
+    if (brik !== G.brikBody) return;
     if (brik._hit) return;
     brik._hit = true;
 
