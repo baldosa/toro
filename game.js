@@ -327,28 +327,34 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Collision ────────────────────────────────────────────────────────────────
+// Ground always means dead (melt + fail), even if brik touched platform first in same throw.
 function onHit({ pairs }) {
   const sid = G.sid;
   pairs.forEach(({ bodyA, bodyB }) => {
     const brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
     const other = brik === bodyA ? bodyB : bodyA;
-    if (!brik || brik !== G.brikBody || brik._hit) return;
+    if (!brik || brik !== G.brikBody) return;
+
+    if (other.label === 'ground') {
+      brik._hit = true;
+      meltBrik(brik.position.x, brik.position.y, brik._skin);
+      try { World.remove(G.wld, brik); } catch (_) { }
+      G.brikBody = null;
+      G.shake = 3;
+      setTimeout(function () { if (G.sid === sid) fail(); }, 700);
+      return;
+    }
+    if (brik._hit) return;
     brik._hit = true;
 
     if (other.label === 'platform') {
       burst(brik.position.x, brik.position.y, 18, true);
       G.shake = 8;
-      setTimeout(() => { if (G.sid === sid) settle(brik, other); }, 1200);
+      setTimeout(function () { if (G.sid === sid) settle(brik, other); }, 1200);
     } else {
-      if (other.label === 'ground') {
-        meltBrik(brik.position.x, brik.position.y, brik._skin);
-        try { World.remove(G.wld, brik); } catch (_) { }
-        G.brikBody = null;
-      } else {
-        burst(brik.position.x, brik.position.y, 8, false);
-      }
+      burst(brik.position.x, brik.position.y, 8, false);
       G.shake = 3;
-      setTimeout(() => { if (G.sid === sid) fail(); }, 700);
+      setTimeout(function () { if (G.sid === sid) fail(); }, 700);
     }
   });
 }
