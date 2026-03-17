@@ -590,24 +590,22 @@ function drawAimer() {
   const ox = TRAY_X(), oy = BRIK_REST_Y();
   const cx = G.touchCur.x, cy = G.touchCur.y;
 
-  if (power < 0.02) return;
-
-
-  // ── Trajectory preview ─────────────────────────────────────────────────────
-  if (power > 0.06) {
-    const grav = 2.5 * 0.003;
-    ctx.save();
-    for (let t = 0.08; t < 3.2; t += 0.1) {
-      const ex = ox + vx * t * 16;
-      const ey = oy + vy * t * 16 + 0.5 * grav * (t * 16) * (t * 16);
-      if (ex > W + 20 || ey > GY() + 10 || ex < 0) break;
-      const frac = t / 3.2;
-      const r2 = Math.floor(frac * 200 + 55), g2 = Math.floor((1 - frac) * 200 + 55);
-      ctx.fillStyle = `rgba(${r2},${g2},80,${(1 - frac) * 0.8 * power})`;
-      ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, 4 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.restore();
+  // ── Trajectory preview (always show when touching; min opacity 0.1 as placeholder) ─
+  var TRAJ_MIN_OPACITY = 0.1;
+  var grav = 2.5 * 0.003;
+  ctx.save();
+  for (var ti = 0.08; ti < 3.2; ti += 0.1) {
+    var ex = ox + vx * ti * 16;
+    var ey = oy + vy * ti * 16 + 0.5 * grav * (ti * 16) * (ti * 16);
+    if (ex > W + 20 || ey > GY() + 10 || ex < 0) break;
+    var frac = ti / 3.2;
+    var r2 = Math.floor(frac * 200 + 55), g2 = Math.floor((1 - frac) * 200 + 55);
+    var dotOpacity = (1 - frac) * 0.8 * power;
+    if (dotOpacity < TRAJ_MIN_OPACITY) dotOpacity = TRAJ_MIN_OPACITY;
+    ctx.fillStyle = 'rgba(' + r2 + ',' + g2 + ',80,' + dotOpacity + ')';
+    ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, 4 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
   }
+  ctx.restore();
 
   // ── Power bar — below the tray, wide and thumb-friendly ─────────────────
   const barW = Math.min(W * 0.45, 220);
