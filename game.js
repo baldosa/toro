@@ -5,28 +5,32 @@ const { Engine, Bodies, Body, World, Events, Composite } = Matter;
 // ─── Canvas & sizing ─────────────────────────────────────────────────────────
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
-let W = 0, H = 0;
+let W = 0, H = 0;           // world dimensions (game + 50% top, left, right)
+let origW = 0, origH = 0;   // original window size (canvas size)
 
 function resize() {
-  W = window.innerWidth;
-  H = window.innerHeight;
-  cv.width = W;
-  cv.height = H;
-  // Regenerate FISH on resize
+  origW = window.innerWidth;
+  origH = window.innerHeight;
+  W = origW + Math.round(origW * 0.25);   // +50% left, +50% right
+  H = origH + Math.round(origH * 0.25);       // +50% top
+  cv.width = origW;
+  cv.height = origH;
   makeFISH();
-  // Rebuild ground if engine exists
-  if (G && G.eng) rebuildGround();
+  if (G && G.eng) {
+    rebuildGround();
+    G.camScaleX = W / origW;
+    G.camScaleY = H / origH;
+  }
 }
 
 // ─── Layout helpers — always derived from W/H ─────────────────────────────────
-// Portrait: tray on left, platform on right
-// Landscape: same but proportions shift
+// Kept within initial camera view (center origW×origH of world)
 function isLandscape() { return W > H; }
 function GY() { return Math.round(H * (isLandscape() ? 0.84 : 0.86)); }
-function TRAY_X() { return Math.round(W * (isLandscape() ? 0.18 : 0.22)); }
+function TRAY_X() { return Math.round(W * (isLandscape() ? 0.30 : 0.32)); }
 function TRAY_TOP_Y() { return GY() - Math.round(H * (isLandscape() ? 0.18 : 0.14)); }
 function BRIK_REST_Y() { return TRAY_TOP_Y() - BH() / 2; }
-function PLAT_BASE_X() { return Math.round(W * (isLandscape() ? 0.78 : 0.73)); }
+function PLAT_BASE_X() { return Math.round(W * (isLandscape() ? 0.68 : 0.70)); }
 function PLAT_BASE_Y() { return GY() - 20; }
 
 // Brik size — scales with screen
@@ -144,6 +148,7 @@ function newG() {
     sid: 0,
     platW: 0,
     landedBriks: [],   // briks that have successfully landed and stay in world
+    camScaleX: 1, camScaleY: 1, brikMinY: null, brikHitTarget: false,   // zoom: original view = (W/origW, H/origH)
   };
 }
 
@@ -160,6 +165,8 @@ function init() {
   const prevBest = G ? G.best : 0;
   G = newG();
   G.best = prevBest;
+  G.camScaleX = W / origW;
+  G.camScaleY = H / origH;
   G.sid = Math.random();
   G.touchStart = { x: TRAY_X(), y: BRIK_REST_Y() };
   G.touchCur = { x: TRAY_X(), y: BRIK_REST_Y() };
@@ -229,7 +236,7 @@ function arcFromDrag() {
   const angle = Math.max(0, Math.min(90 * Math.PI / 180,
     baseAngle + dyNorm * angleRange));
 
-  const speed = 10 + power * 20;                   // 10..30
+  const speed = 30 + power * 30;                   // base x3: 30..50
   const vx = Math.cos(angle) * speed;
   const vy = -Math.sin(angle) * speed;           // negative = up
   const spin = -(power * 0.24 + 0.05);            // CCW
@@ -261,6 +268,8 @@ function launch() {
   sfx.play().catch(() => { });;
   G.phase = 'flying';
   G.trail = [];
+  G.brikMinY = null;
+  G.brikHitTarget = false;
   hideMsg();
 }
 
@@ -269,7 +278,10 @@ function launch() {
 // Drag can start ANYWHERE — no need to hit the brik exactly.
 function evXY(e) {
   const src = e.changedTouches ? e.changedTouches[0] : e;
-  return { x: src.clientX, y: src.clientY };
+  var rect = cv.getBoundingClientRect();
+  var x = ((src.clientX - rect.left) / rect.width) * W;
+  var y = ((src.clientY - rect.top) / rect.height) * H;
+  return { x: x, y: y };
 }
 
 cv.addEventListener('touchstart', e => {
@@ -341,6 +353,7 @@ function onHit({ pairs }) {
       if (brik === G.brikBody) {
         brik._hit = true;
         G.brikBody = null;
+        G.brikHitTarget = true;
         G.shake = 3;
         setTimeout(function () { if (G.sid === sid) fail(); }, 700);
       } else {
@@ -356,6 +369,7 @@ function onHit({ pairs }) {
     if (brik !== G.brikBody) return;
     if (brik._hit) return;
     brik._hit = true;
+    G.brikHitTarget = true;
 
     if (other.label === 'platform') {
       burst(brik.position.x, brik.position.y, 18, true);
@@ -510,9 +524,12 @@ function updateUI() {
 
 function drawBg() {
   const gy = GY();
-  const gr = ctx.createLinearGradient(0, 0, 0, gy);
+  var skyTop = -H * 2;
+  var skyH = gy - skyTop;
+  const gr = ctx.createLinearGradient(0, skyTop, 0, gy);
   gr.addColorStop(0, '#07101a'); gr.addColorStop(1, '#0f1e2c');
-  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, gy);
+  ctx.fillStyle = gr;
+  ctx.fillRect(-W * 2, skyTop, W * 5, skyH);
 
   const t = Date.now() * .001;
   FISH.forEach(s => {
@@ -532,10 +549,12 @@ function drawBg() {
   });
   ctx.globalAlpha = 1;
 
-  // Ground
-  ctx.fillStyle = '#0c1420'; ctx.fillRect(0, gy, W, H - gy);
+  // Ground (extend left/right so zoomed-out view never shows empty)
+  ctx.fillStyle = '#0c1420';
+  ctx.fillRect(-W * 2, gy, W * 5, H - gy + H);
   // Grass strip
-  ctx.fillStyle = '#14261a'; ctx.fillRect(0, gy, W, 5);
+  ctx.fillStyle = '#14261a';
+  ctx.fillRect(-W * 2, gy, W * 5, 5);
 }
 
 function drawTray() {
@@ -711,6 +730,47 @@ function loop(ts) {
     if (G.trail.length > 30) G.trail.shift();
     const { x, y } = G.brikBody.position;
     if (x > W + 150 || x < -150 || y > H + 150) fail();
+    if (G.brikMinY == null || y < G.brikMinY) G.brikMinY = y;
+    var vy = G.brikBody.velocity.y;
+    var gravY = 2.5;
+    var effectiveMinY = G.brikMinY;
+    if (vy < 0) {
+      var predictedApexY = y - (vy * vy) / (2 * gravY);
+      if (predictedApexY < effectiveMinY) effectiveMinY = predictedApexY;
+    }
+    var contentH = GY() - effectiveMinY + 120;
+    var zoomOutScale = Math.min(1, H / contentH);
+    var MIN_ZOOM = 0.28;
+    if (zoomOutScale < MIN_ZOOM) zoomOutScale = MIN_ZOOM;
+    var targetX = W / origW;
+    var targetY = H / origH;
+    var lerpSpeed = 0.04;
+    if (G.brikHitTarget) {
+      targetX = W / origW;
+      targetY = H / origH;
+    } else {
+      var s;
+      if (vy < -1.2) {
+        s = zoomOutScale;
+      } else if (vy > 1.2) {
+        s = zoomOutScale;
+      } else {
+        var t = (vy + 1.2) / 2.4;
+        t = t * t * (3 - 2 * t);
+        s = zoomOutScale + (1 - zoomOutScale) * t;
+      }
+      targetX = s;
+      targetY = s;
+    }
+    G.camScaleX = G.camScaleX + (targetX - G.camScaleX) * lerpSpeed;
+    G.camScaleY = G.camScaleY + (targetY - G.camScaleY) * lerpSpeed;
+  } else {
+    G.brikMinY = null;
+    G.brikHitTarget = false;
+    var tx = W / origW;
+    var ty = H / origH;
+    G.camScaleX = G.camScaleX + (tx - G.camScaleX) * 0.05;
+    G.camScaleY = G.camScaleY + (ty - G.camScaleY) * 0.05;
   }
 
   // Check if any landed brik has fallen off the platform to the ground
@@ -725,7 +785,15 @@ function loop(ts) {
 
   const sx = G.shake > 0 ? (Math.random() - .5) * G.shake : 0;
   const sy = G.shake > 0 ? (Math.random() - .5) * G.shake : 0;
-  ctx.save(); ctx.translate(sx, sy);
+  var camCenterX = (TRAY_X() + PLAT_BASE_X()) / 2;
+  var camCenterY = (BRIK_REST_Y() + PLAT_BASE_Y()) / 2;
+  ctx.save();
+  ctx.scale(origW / W, origH / H);
+  ctx.translate(origW / 2 - (camCenterX * origW / W), 0);
+  ctx.translate(sx, sy);
+  ctx.translate(camCenterX, camCenterY);
+  ctx.scale(G.camScaleX, G.camScaleY);
+  ctx.translate(-camCenterX, -camCenterY);
 
   drawBg();
   drawTray();
