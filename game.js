@@ -703,23 +703,20 @@ function drawAimer() {
 
   const { vx, vy, power, angle, pullX } = arcFromDrag();
   const ox = TRAY_X(), oy = BRIK_REST_Y();
-  const cx = G.touchCur.x, cy = G.touchCur.y;
 
-  // ── Trajectory preview (same intensity colors as power bar: green → red by power) ─
+  // ── Trajectory preview — white / gray
   var TRAJ_MIN_OPACITY = 0.1;
   var grav = 2.5 * 0.003;
-  var trajR = Math.floor(power * 220);
-  var trajG = Math.floor((1 - power) * 180 + 60);
   ctx.save();
-  for (var ti = 0.08; ti < 3.2; ti += 0.1) {
+  for (var ti = 0.08; ti < 3.2; ti += 0.05) {
     var ex = ox + vx * ti * 16;
     var ey = oy + vy * ti * 16 + 0.5 * grav * (ti * 16) * (ti * 16);
     if (ex > W + 20 || ey > GY() + 10 || ex < 0) break;
     var frac = ti / 3.2;
     var dotOpacity = (1 - frac) * 0.8 * power;
     if (dotOpacity < TRAJ_MIN_OPACITY) dotOpacity = TRAJ_MIN_OPACITY;
-    ctx.fillStyle = 'rgba(' + trajR + ',' + trajG + ',50,' + dotOpacity + ')';
-    ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, 4 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(230, 236, 242, ' + dotOpacity + ')';
+    ctx.beginPath(); ctx.arc(ex, ey, Math.max(1, 2 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
 
