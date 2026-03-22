@@ -112,8 +112,11 @@ const FISH_IMG = addImage('imgs/fish.png');
 const msgEl = document.getElementById('msg');
 const popEl = document.getElementById('pop');
 let popTimer = null;
+let msgHideTimer = null;
 
 function showMsg(h, sub = '', pts = '', showBtn = false) {
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
   msgEl.innerHTML =
     `<h1>${h}</h1>` +
     (sub ? `<div class="sub">${sub}</div>` : '') +
@@ -182,7 +185,10 @@ function init() {
   updateUI();
   showMsg('VINO TORO FLIP',
     'DRAG LEFT → POWER &nbsp;·&nbsp; DRAG UP/DOWN → ANGLE<br>RELEASE TO FLIP · LAND UPRIGHT');
-  setTimeout(hideMsg, 4000);
+  msgHideTimer = setTimeout(function () {
+    msgHideTimer = null;
+    hideMsg();
+  }, 4000);
 }
 
 function rebuildGround() {
@@ -272,6 +278,8 @@ function launch() {
   G.trail = [];
   G.brikMinY = null;
   G.brikHitTarget = false;
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
   hideMsg();
 }
 
