@@ -112,8 +112,16 @@ const FISH_IMG = addImage('imgs/fish.png');
 const msgEl = document.getElementById('msg');
 const popEl = document.getElementById('pop');
 let popTimer = null;
+let msgHideTimer = null;
 
 function showMsg(h, sub = '', pts = '', showBtn = false) {
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
+  if (showBtn) {
+    msgEl.classList.add('msg-dim');
+  } else {
+    msgEl.classList.remove('msg-dim');
+  }
   msgEl.innerHTML =
     `<h1>${h}</h1>` +
     (sub ? `<div class="sub">${sub}</div>` : '') +
@@ -182,7 +190,10 @@ function init() {
   updateUI();
   showMsg('VINO TORO FLIP',
     'DRAG LEFT → POWER &nbsp;·&nbsp; DRAG UP/DOWN → ANGLE<br>RELEASE TO FLIP · LAND UPRIGHT');
-  setTimeout(hideMsg, 4000);
+  msgHideTimer = setTimeout(function () {
+    msgHideTimer = null;
+    hideMsg();
+  }, 4000);
 }
 
 function rebuildGround() {
@@ -256,6 +267,8 @@ function launch() {
   });
   brik._hit = false;
   brik._done = false;
+  brik._settleTimer = null;
+  brik._bigBurst = false;
   brik._skin = G.skin;   // remember skin so it draws correctly after archiving
   World.add(G.wld, brik);
   G.brikBody = brik;
@@ -270,6 +283,8 @@ function launch() {
   G.trail = [];
   G.brikMinY = null;
   G.brikHitTarget = false;
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
   hideMsg();
 }
 
@@ -343,14 +358,32 @@ document.addEventListener('keydown', e => {
 function onHit({ pairs }) {
   const sid = G.sid;
   pairs.forEach(({ bodyA, bodyB }) => {
-    const brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
-    const other = brik === bodyA ? bodyB : bodyA;
+    // When both bodies are briks, Matter.js order is undefined — always treat
+    // G.brikBody as the flying brik, or we return early at brik !== G.brikBody
+    // and stack landings never run.
+    var brik;
+    var other;
+    if (bodyA.label === 'brik' && bodyB.label === 'brik') {
+      if (bodyA === G.brikBody) {
+        brik = bodyA;
+        other = bodyB;
+      } else if (bodyB === G.brikBody) {
+        brik = bodyB;
+        other = bodyA;
+      } else {
+        return;
+      }
+    } else {
+      brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
+      other = brik === bodyA ? bodyB : bodyA;
+    }
     if (!brik) return;
 
     if (other.label === 'ground') {
       meltBrik(brik.position.x, brik.position.y, brik._skin);
       try { World.remove(G.wld, brik); } catch (_) { }
       if (brik === G.brikBody) {
+        clearPendingSettle(brik);
         brik._hit = true;
         G.brikBody = null;
         G.brikHitTarget = true;
@@ -367,14 +400,40 @@ function onHit({ pairs }) {
       return;
     }
     if (brik !== G.brikBody) return;
+
+    // Platform beats a graze on the stack: can fire after brik–brik in another
+    // frame or later in the same forEach — must run before the _hit gate.
+    if (other.label === 'platform') {
+      if (brik._settleTimer != null) {
+        clearTimeout(brik._settleTimer);
+        brik._settleTimer = null;
+      }
+      if (!brik._bigBurst) {
+        burst(brik.position.x, brik.position.y, 18, true);
+        G.shake = 8;
+        brik._bigBurst = true;
+      }
+      brik._hit = true;
+      G.brikHitTarget = true;
+      brik._settleTimer = setTimeout(function () {
+        brik._settleTimer = null;
+        if (G.sid === sid) settle(brik, other);
+      }, 1200);
+      return;
+    }
+
     if (brik._hit) return;
     brik._hit = true;
     G.brikHitTarget = true;
 
-    if (other.label === 'platform') {
+    if (other.label === 'brik' && G.landedBriks.indexOf(other) >= 0) {
       burst(brik.position.x, brik.position.y, 18, true);
       G.shake = 8;
-      setTimeout(function () { if (G.sid === sid) settle(brik, other); }, 1200);
+      brik._bigBurst = true;
+      brik._settleTimer = setTimeout(function () {
+        brik._settleTimer = null;
+        if (G.sid === sid) settle(brik, other);
+      }, 1200);
     } else {
       burst(brik.position.x, brik.position.y, 8, false);
       G.shake = 3;
@@ -383,18 +442,38 @@ function onHit({ pairs }) {
   });
 }
 
+function clearPendingSettle(brik) {
+  if (brik && brik._settleTimer != null) {
+    clearTimeout(brik._settleTimer);
+    brik._settleTimer = null;
+  }
+}
+
+function brikOverlapsSupport(brik, support) {
+  const { x: bx, y: by } = brik.position;
+  const { x: px, y: py } = support.position;
+  if (support.label === 'platform') {
+    return Math.abs(bx - px) < support._pw / 2 + BW() / 2 - 3
+      && by < py + 8 && by > py - BH() * 3;
+  }
+  return Math.abs(bx - px) < BW() - 3
+    && by < py + 8 && by > py - BH() * 3;
+}
+
 // ─── Settle ───────────────────────────────────────────────────────────────────
-function settle(brik, plat) {
+// support = platform body, or a landed brik to stack on
+function settle(brik, support) {
   if (brik._done || G.phase === 'dead') return;
   const spd = Math.hypot(brik.velocity.x, brik.velocity.y);
   const av = Math.abs(brik.angularVelocity);
   let a = brik.angle % (Math.PI * 2); if (a < 0) a += Math.PI * 2;
   const fromUpright = Math.min(a, Math.PI * 2 - a);
   const fromFlipped = Math.abs(a - Math.PI);
-  const { x: bx, y: by } = brik.position;
-  const { x: px, y: py } = plat.position;
-  const over = Math.abs(bx - px) < plat._pw / 2 + BW() / 2 - 3
-    && by < py + 8 && by > py - BH() * 3;
+  let over = brikOverlapsSupport(brik, support);
+  // Grazed the stack then came to rest on the platform — still a valid land.
+  if (!over && support.label === 'brik' && G.platBody) {
+    over = brikOverlapsSupport(brik, G.platBody);
+  }
 
   if (over && spd < 2.8 && av < 0.10) {
     let mult = 1, label = 'LANDED!';
@@ -417,7 +496,7 @@ function settle(brik, plat) {
     doSuccess(brik, label, mult);
   } else if (spd > 0.5 || av > 0.06) {
     const sid = G.sid;
-    setTimeout(() => { if (G.sid === sid) settle(brik, plat); }, 750);
+    setTimeout(() => { if (G.sid === sid) settle(brik, support); }, 750);
   } else {
     fail();
     // play random SFX_FAIL on fail
@@ -430,6 +509,7 @@ function settle(brik, plat) {
 // ─── Success / Fail ───────────────────────────────────────────────────────────
 function doSuccess(brik, label, mult) {
   if (brik._done || G.phase === 'dead') return;
+  clearPendingSettle(brik);
   brik._done = true;
   G.phase = 'idle';
   G.streak++;
