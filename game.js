@@ -723,6 +723,42 @@ function drawAimer() {
   }
   ctx.restore();
 
+  // ── Quarter-circle + angle scale (90 / 45 / 0) — same tones as power bar track ─
+  var bwA = BW(), bhA = BH();
+  var arcCx = ox - bwA * 0.5;
+  var arcCy = oy + bhA * 0.5;
+  var arcR = Math.min(W, H) * 0.11 * (0.88 + 0.12 * power);
+  var innerGap = Math.max(3, Math.min(W, H) * 0.012);
+  var innerR = arcR - innerGap;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(0,0,0,.55)';
+  ctx.lineWidth = Math.max(2.5, Math.min(W, H) * 0.004);
+  var dotLen = Math.max(1.8, Math.min(W, H) * 0.0028);
+  ctx.setLineDash([dotLen, dotLen * 1.85]);
+  ctx.beginPath();
+  ctx.arc(arcCx, arcCy, arcR, -Math.PI / 2, 0, false);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(140,160,170,.6)';
+  ctx.font = `${Math.round(Math.max(8, Math.min(W, H) * 0.017))}px 'Courier New', monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  var angleMarks = [90, 45, 0];
+  for (var mi = 0; mi < angleMarks.length; mi++) {
+    var deg = angleMarks[mi];
+    var tInner = (90 - deg) / 90;
+    var theta = -Math.PI / 2 + tInner * (Math.PI / 2);
+    var tx = arcCx + innerR * Math.cos(theta);
+    var ty = arcCy + innerR * Math.sin(theta);
+    ctx.save();
+    ctx.translate(tx, ty);
+    ctx.rotate(theta + Math.PI / 2);
+    ctx.fillText(String(deg), 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+
   // ── Power bar — below the tray, wide and thumb-friendly ─────────────────
   const barW = Math.min(W * 0.45, 220);
   const bx = ox - barW / 2;
@@ -743,7 +779,11 @@ function drawAimer() {
   ctx.fillStyle = 'rgba(140,160,170,.6)';
   ctx.font = `${Math.round(Math.max(9, barH * 0.7))}px Courier New`;
   ctx.textAlign = 'center';
-  ctx.fillText('POWER', bx + barW / 2, by + barH + Math.round(barH * 1.1));
+  ctx.textBaseline = 'alphabetic';
+  var powerLabelY = by + barH + Math.round(barH * 1.1);
+  ctx.fillText('POWER', bx + barW / 2, powerLabelY);
+  var angleDeg = Math.round(angle * 180 / Math.PI);
+  ctx.fillText(String(angleDeg) + '\u00B0', bx + barW / 2, powerLabelY + Math.round(barH * 1.15));
   ctx.restore();
 
 
