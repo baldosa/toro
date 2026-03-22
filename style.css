@@ -78,6 +78,20 @@
       padding: 20px;
     }
 
+    /* Darken canvas + HUD on fail / Play Again screen only */
+    #msg.msg-dim::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(10, 15, 22, 0.72);
+      z-index: 0;
+    }
+
+    #msg.msg-dim > * {
+      position: relative;
+      z-index: 1;
+    }
+
     #msg.off {
       opacity: 0;
     }

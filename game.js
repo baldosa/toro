@@ -117,6 +117,11 @@ let msgHideTimer = null;
 function showMsg(h, sub = '', pts = '', showBtn = false) {
   clearTimeout(msgHideTimer);
   msgHideTimer = null;
+  if (showBtn) {
+    msgEl.classList.add('msg-dim');
+  } else {
+    msgEl.classList.remove('msg-dim');
+  }
   msgEl.innerHTML =
     `<h1>${h}</h1>` +
     (sub ? `<div class="sub">${sub}</div>` : '') +
