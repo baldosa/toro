@@ -73,21 +73,28 @@
       justify-content: center;
       text-align: center;
       pointer-events: none;
-      transition: opacity 0.35s;
+      transition: opacity 0.35s ease;
       z-index: 20;
       padding: 20px;
     }
 
-    /* Darken canvas + HUD on fail / Play Again screen only */
-    #msg.msg-dim::before {
+    /* Dim layer — opacity animates when .msg-dim toggles (fail screen in/out) */
+    #msg::before {
       content: '';
       position: absolute;
       inset: 0;
       background: rgba(10, 15, 22, 0.72);
+      opacity: 0;
       z-index: 0;
+      pointer-events: none;
+      transition: opacity 0.45s ease;
     }
 
-    #msg.msg-dim > * {
+    #msg.msg-dim::before {
+      opacity: 1;
+    }
+
+    #msg > * {
       position: relative;
       z-index: 1;
     }
