@@ -723,27 +723,32 @@ function drawAimer() {
   }
   ctx.restore();
 
-  // ── Quarter-circle + angle scale (90 / 45 / 0) — same tones as power bar track ─
+  // ── Quarter-circle + angle scale (90 / 45 / 0) — white / gray on sky ─
   var bwA = BW(), bhA = BH();
-  var arcCx = ox - bwA * 0.5 + Math.min(W, H) * 0.005;
-  var arcCy = oy + bhA * 0.5 - Math.min(W, H) * 0.033;
-  var arcR = Math.min(W, H) * 0.082 * (0.88 + 0.12 * power);
+  var arcCx = ox - bwA * 0.5 + Math.min(W, H) * 0.033;
+  var arcCy = oy + bhA * 0.5 - Math.min(W, H) * 0.057;
+  var arcR = Math.min(W, H) * (0.082 * (0.88 + 0.12 * power) + 0.032);
   var innerGap = Math.max(2.5, Math.min(W, H) * 0.009);
   var innerR = arcR - innerGap;
   ctx.save();
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = 'rgba(0,0,0,.55)';
-  ctx.lineWidth = Math.max(2, Math.min(W, H) * 0.0033);
-  var dotLen = Math.max(1.5, Math.min(W, H) * 0.0024);
-  ctx.setLineDash([dotLen, dotLen * 1.85]);
-  ctx.beginPath();
-  ctx.arc(arcCx, arcCy, arcR, -Math.PI / 2, 0, false);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(74, 82, 87, 0.9)';
-  ctx.font = `${Math.round(Math.max(7, Math.min(W, H) * 0.014))}px 'Courier New', monospace`;
+  var arcSweep = Math.PI / 2;
+  var arcLen = arcR * arcSweep;
+  var dotR = Math.max(1.1, Math.min(W, H) * 0.00165);
+  var dotPitch = dotR * 2.35;
+  var numArcDots = Math.max(8, Math.min(60, Math.floor(arcLen / dotPitch)));
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+  for (var di = 0; di <= numArcDots; di++) {
+    var thDot = -Math.PI / 2 + (di / numArcDots) * arcSweep;
+    var ddx = arcCx + arcR * Math.cos(thDot);
+    var ddy = arcCy + arcR * Math.sin(thDot);
+    ctx.beginPath();
+    ctx.arc(ddx, ddy, dotR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.font = `${Math.round(Math.max(5, Math.min(W, H) * 0.01))}px 'Courier New', monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#c5d0d8';
   var angleMarks = [90, 45, 0];
   for (var mi = 0; mi < angleMarks.length; mi++) {
     var deg = angleMarks[mi];
