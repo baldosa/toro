@@ -112,8 +112,16 @@ const FISH_IMG = addImage('imgs/fish.png');
 const msgEl = document.getElementById('msg');
 const popEl = document.getElementById('pop');
 let popTimer = null;
+let msgHideTimer = null;
 
 function showMsg(h, sub = '', pts = '', showBtn = false) {
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
+  if (showBtn) {
+    msgEl.classList.add('msg-dim');
+  } else {
+    msgEl.classList.remove('msg-dim');
+  }
   msgEl.innerHTML =
     `<h1>${h}</h1>` +
     (sub ? `<div class="sub">${sub}</div>` : '') +
@@ -182,7 +190,10 @@ function init() {
   updateUI();
   showMsg('VINO TORO FLIP',
     'DRAG LEFT → POWER &nbsp;·&nbsp; DRAG UP/DOWN → ANGLE<br>RELEASE TO FLIP · LAND UPRIGHT');
-  setTimeout(hideMsg, 4000);
+  msgHideTimer = setTimeout(function () {
+    msgHideTimer = null;
+    hideMsg();
+  }, 4000);
 }
 
 function rebuildGround() {
@@ -256,6 +267,8 @@ function launch() {
   });
   brik._hit = false;
   brik._done = false;
+  brik._settleTimer = null;
+  brik._bigBurst = false;
   brik._skin = G.skin;   // remember skin so it draws correctly after archiving
   World.add(G.wld, brik);
   G.brikBody = brik;
@@ -270,6 +283,8 @@ function launch() {
   G.trail = [];
   G.brikMinY = null;
   G.brikHitTarget = false;
+  clearTimeout(msgHideTimer);
+  msgHideTimer = null;
   hideMsg();
 }
 
@@ -343,14 +358,32 @@ document.addEventListener('keydown', e => {
 function onHit({ pairs }) {
   const sid = G.sid;
   pairs.forEach(({ bodyA, bodyB }) => {
-    const brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
-    const other = brik === bodyA ? bodyB : bodyA;
+    // When both bodies are briks, Matter.js order is undefined — always treat
+    // G.brikBody as the flying brik, or we return early at brik !== G.brikBody
+    // and stack landings never run.
+    var brik;
+    var other;
+    if (bodyA.label === 'brik' && bodyB.label === 'brik') {
+      if (bodyA === G.brikBody) {
+        brik = bodyA;
+        other = bodyB;
+      } else if (bodyB === G.brikBody) {
+        brik = bodyB;
+        other = bodyA;
+      } else {
+        return;
+      }
+    } else {
+      brik = bodyA.label === 'brik' ? bodyA : bodyB.label === 'brik' ? bodyB : null;
+      other = brik === bodyA ? bodyB : bodyA;
+    }
     if (!brik) return;
 
     if (other.label === 'ground') {
       meltBrik(brik.position.x, brik.position.y, brik._skin);
       try { World.remove(G.wld, brik); } catch (_) { }
       if (brik === G.brikBody) {
+        clearPendingSettle(brik);
         brik._hit = true;
         G.brikBody = null;
         G.brikHitTarget = true;
@@ -367,14 +400,40 @@ function onHit({ pairs }) {
       return;
     }
     if (brik !== G.brikBody) return;
+
+    // Platform beats a graze on the stack: can fire after brik–brik in another
+    // frame or later in the same forEach — must run before the _hit gate.
+    if (other.label === 'platform') {
+      if (brik._settleTimer != null) {
+        clearTimeout(brik._settleTimer);
+        brik._settleTimer = null;
+      }
+      if (!brik._bigBurst) {
+        burst(brik.position.x, brik.position.y, 18, true);
+        G.shake = 8;
+        brik._bigBurst = true;
+      }
+      brik._hit = true;
+      G.brikHitTarget = true;
+      brik._settleTimer = setTimeout(function () {
+        brik._settleTimer = null;
+        if (G.sid === sid) settle(brik, other);
+      }, 1200);
+      return;
+    }
+
     if (brik._hit) return;
     brik._hit = true;
     G.brikHitTarget = true;
 
-    if (other.label === 'platform') {
+    if (other.label === 'brik' && G.landedBriks.indexOf(other) >= 0) {
       burst(brik.position.x, brik.position.y, 18, true);
       G.shake = 8;
-      setTimeout(function () { if (G.sid === sid) settle(brik, other); }, 1200);
+      brik._bigBurst = true;
+      brik._settleTimer = setTimeout(function () {
+        brik._settleTimer = null;
+        if (G.sid === sid) settle(brik, other);
+      }, 1200);
     } else {
       burst(brik.position.x, brik.position.y, 8, false);
       G.shake = 3;
@@ -383,18 +442,38 @@ function onHit({ pairs }) {
   });
 }
 
+function clearPendingSettle(brik) {
+  if (brik && brik._settleTimer != null) {
+    clearTimeout(brik._settleTimer);
+    brik._settleTimer = null;
+  }
+}
+
+function brikOverlapsSupport(brik, support) {
+  const { x: bx, y: by } = brik.position;
+  const { x: px, y: py } = support.position;
+  if (support.label === 'platform') {
+    return Math.abs(bx - px) < support._pw / 2 + BW() / 2 - 3
+      && by < py + 8 && by > py - BH() * 3;
+  }
+  return Math.abs(bx - px) < BW() - 3
+    && by < py + 8 && by > py - BH() * 3;
+}
+
 // ─── Settle ───────────────────────────────────────────────────────────────────
-function settle(brik, plat) {
+// support = platform body, or a landed brik to stack on
+function settle(brik, support) {
   if (brik._done || G.phase === 'dead') return;
   const spd = Math.hypot(brik.velocity.x, brik.velocity.y);
   const av = Math.abs(brik.angularVelocity);
   let a = brik.angle % (Math.PI * 2); if (a < 0) a += Math.PI * 2;
   const fromUpright = Math.min(a, Math.PI * 2 - a);
   const fromFlipped = Math.abs(a - Math.PI);
-  const { x: bx, y: by } = brik.position;
-  const { x: px, y: py } = plat.position;
-  const over = Math.abs(bx - px) < plat._pw / 2 + BW() / 2 - 3
-    && by < py + 8 && by > py - BH() * 3;
+  let over = brikOverlapsSupport(brik, support);
+  // Grazed the stack then came to rest on the platform — still a valid land.
+  if (!over && support.label === 'brik' && G.platBody) {
+    over = brikOverlapsSupport(brik, G.platBody);
+  }
 
   if (over && spd < 2.8 && av < 0.10) {
     let mult = 1, label = 'LANDED!';
@@ -417,7 +496,7 @@ function settle(brik, plat) {
     doSuccess(brik, label, mult);
   } else if (spd > 0.5 || av > 0.06) {
     const sid = G.sid;
-    setTimeout(() => { if (G.sid === sid) settle(brik, plat); }, 750);
+    setTimeout(() => { if (G.sid === sid) settle(brik, support); }, 750);
   } else {
     fail();
     // play random SFX_FAIL on fail
@@ -430,6 +509,7 @@ function settle(brik, plat) {
 // ─── Success / Fail ───────────────────────────────────────────────────────────
 function doSuccess(brik, label, mult) {
   if (brik._done || G.phase === 'dead') return;
+  clearPendingSettle(brik);
   brik._done = true;
   G.phase = 'idle';
   G.streak++;
@@ -623,23 +703,61 @@ function drawAimer() {
 
   const { vx, vy, power, angle, pullX } = arcFromDrag();
   const ox = TRAY_X(), oy = BRIK_REST_Y();
-  const cx = G.touchCur.x, cy = G.touchCur.y;
 
-  // ── Trajectory preview (same intensity colors as power bar: green → red by power) ─
+  // ── Trajectory preview — white / gray
   var TRAJ_MIN_OPACITY = 0.1;
   var grav = 2.5 * 0.003;
-  var trajR = Math.floor(power * 220);
-  var trajG = Math.floor((1 - power) * 180 + 60);
   ctx.save();
-  for (var ti = 0.08; ti < 3.2; ti += 0.1) {
+  for (var ti = 0.08; ti < 3.2; ti += 0.05) {
     var ex = ox + vx * ti * 16;
     var ey = oy + vy * ti * 16 + 0.5 * grav * (ti * 16) * (ti * 16);
     if (ex > W + 20 || ey > GY() + 10 || ex < 0) break;
     var frac = ti / 3.2;
     var dotOpacity = (1 - frac) * 0.8 * power;
     if (dotOpacity < TRAJ_MIN_OPACITY) dotOpacity = TRAJ_MIN_OPACITY;
-    ctx.fillStyle = 'rgba(' + trajR + ',' + trajG + ',50,' + dotOpacity + ')';
-    ctx.beginPath(); ctx.arc(ex, ey, Math.max(2, 4 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(230, 236, 242, ' + dotOpacity + ')';
+    ctx.beginPath(); ctx.arc(ex, ey, Math.max(1, 2 * (1 - frac * 0.5)), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // ── Quarter-circle + angle scale (90 / 45 / 0) — white / gray on sky ─
+  var bwA = BW(), bhA = BH();
+  var arcCx = ox - bwA * 0.5 + Math.min(W, H) * 0.033;
+  var arcCy = oy + bhA * 0.5 - Math.min(W, H) * 0.057;
+  var arcR = Math.min(W, H) * (0.082 * (0.88 + 0.12 * power) + 0.032);
+  var innerGap = Math.max(2.5, Math.min(W, H) * 0.009);
+  var innerR = arcR - innerGap;
+  ctx.save();
+  var arcSweep = Math.PI / 2;
+  var arcLen = arcR * arcSweep;
+  var dotR = Math.max(1.1, Math.min(W, H) * 0.00165);
+  var dotPitch = dotR * 2.35;
+  var numArcDots = Math.max(8, Math.min(60, Math.floor(arcLen / dotPitch)));
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+  for (var di = 0; di <= numArcDots; di++) {
+    var thDot = -Math.PI / 2 + (di / numArcDots) * arcSweep;
+    var ddx = arcCx + arcR * Math.cos(thDot);
+    var ddy = arcCy + arcR * Math.sin(thDot);
+    ctx.beginPath();
+    ctx.arc(ddx, ddy, dotR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.font = `${Math.round(Math.max(5, Math.min(W, H) * 0.01))}px 'Courier New', monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#c5d0d8';
+  var angleMarks = [90, 45, 0];
+  for (var mi = 0; mi < angleMarks.length; mi++) {
+    var deg = angleMarks[mi];
+    var tInner = (90 - deg) / 90;
+    var theta = -Math.PI / 2 + tInner * (Math.PI / 2);
+    var tx = arcCx + innerR * Math.cos(theta);
+    var ty = arcCy + innerR * Math.sin(theta);
+    ctx.save();
+    ctx.translate(tx, ty);
+    ctx.rotate(theta + Math.PI / 2);
+    ctx.fillText(String(deg), 0, 0);
+    ctx.restore();
   }
   ctx.restore();
 
@@ -663,7 +781,11 @@ function drawAimer() {
   ctx.fillStyle = 'rgba(140,160,170,.6)';
   ctx.font = `${Math.round(Math.max(9, barH * 0.7))}px Courier New`;
   ctx.textAlign = 'center';
-  ctx.fillText('POWER', bx + barW / 2, by + barH + Math.round(barH * 1.1));
+  ctx.textBaseline = 'alphabetic';
+  var powerLabelY = by + barH + Math.round(barH * 1.1);
+  ctx.fillText('POWER', bx + barW / 2, powerLabelY);
+  var angleDeg = Math.round(angle * 180 / Math.PI);
+  ctx.fillText(String(angleDeg) + '\u00B0', bx + barW / 2, powerLabelY + Math.round(barH * 1.15));
   ctx.restore();
 
 
